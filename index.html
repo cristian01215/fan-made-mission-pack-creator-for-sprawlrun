@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor de paquetes de misiones</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #111416; --panel: #191e20; --field: #101416;
+    --line: #30383a; --text: #e3e8e7; --muted: #9aa5a3;
+    --accent: #a9c5b7; --danger: #e9a6a0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  header, main { max-width: 1050px; margin: auto; padding: 22px; }
+  header { padding-bottom: 4px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { font-size: 1.08rem; margin: 0 0 14px; }
+  h3 { font-size: .98rem; margin: 18px 0 10px; }
+  p, .hint { color: var(--muted); }
+  .hint { font-size: .88rem; margin: 5px 0 12px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px; margin: 14px 0;
+  }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  label { color: var(--muted); font-size: .88rem; }
+  input, textarea, select {
+    width: 100%; color: var(--text); background: var(--field);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 9px 10px; font: inherit;
+  }
+  textarea { min-height: 82px; resize: vertical; }
+  button, .file-button {
+    border: 1px solid var(--line); border-radius: 6px;
+    background: #222a2c; color: var(--text); padding: 8px 12px;
+    font: inherit; cursor: pointer;
+  }
+  button:hover, .file-button:hover { border-color: var(--accent); }
+  button.primary { background: #31453c; border-color: #587161; }
+  button.danger { color: var(--danger); }
+  .toolbar, .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toolbar { margin: 14px 0; }
+  .row { justify-content: space-between; margin-bottom: 8px; }
+  .item { border-top: 1px solid var(--line); padding: 12px 0; }
+  .checkbox { display: flex; align-items: center; gap: 8px; color: var(--text); }
+  .checkbox input { width: auto; }
+  #issues { margin: 8px 0 0; padding-left: 20px; }
+  #issues li { margin: 4px 0; }
+  .ok { color: var(--accent); }
+  .bad { color: var(--danger); }
+  #json { min-height: 260px; font: 13px/1.45 ui-monospace, monospace; }
+  .hidden { display: none; }
+  @media (max-width: 650px) {
+    header, main { padding: 14px; }
+    .grid { grid-template-columns: 1fr; }
+    .wide { grid-column: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Editor de paquetes de misiones</h1>
+  <div class="hint">Crea el contenido y expórtalo como un archivo JSON.</div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Paquete</h2>
+    <div class="grid">
+      <div class="field"><label>ID del paquete (letras, números, - y _)</label>
+        <input data-path="id" placeholder="mi_campana"></div>
+      <div class="field"><label>Título</label>
+        <input data-path="title" placeholder="MI CAMPAÑA"></div>
+      <div class="field wide"><label>Descripción breve</label>
+        <input data-path="tagline"></div>
+      <div class="field"><label>Temporada (opcional)</label>
+        <input data-path="season" placeholder="Déjalo vacío para campaña normal"></div>
+    </div>
+
+    <h3>Mensajes del paquete</h3>
+    <p class="hint">Estos mensajes generales sirven también cuando ya no quedan misiones pendientes.</p>
+    <div id="pack-signals"></div>
+
+    <h3>Resumen semanal</h3>
+    <p class="hint">Escribe una introducción breve, sin cifras. La app añade los datos semanales.</p>
+    <div id="debrief-signals"></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <h2>Misiones</h2>
+      <button class="primary" data-action="add-mission">＋ Añadir misión</button>
+    </div>
+    <div class="field">
+      <label>Misión que estás editando</label>
+      <select id="mission-select"></select>
+    </div>
+    <div id="mission-editor"></div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <h2>Validación</h2>
+      <button id="validate" type="button">Revisar paquete</button>
+    </div>
+    <div id="validation-status"></div>
+    <ul id="issues"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <h2>JSON</h2>
+      <div class="toolbar">
+        <button class="primary" id="download">Descargar .json</button>
+        <button id="copy">Copiar JSON</button>
+        <label class="file-button">Abrir JSON
+          <input id="import-file" type="file" accept=".json,application/json" class="hidden">
+        </label>
+      </div>
+    </div>
+    <textarea id="json" readonly spellcheck="false"></textarea>
+  </section>
+</main>
+
+<script>
+(() => {
+  const speakers = ["KESTREL", "HALCYON", "SIX", "PACHINKO", "VANTAR", "SYSTEM"];
+  const sfx = ["", "alert", "chase_start", "chase_clear", "chase_failed", "glitch",
+    "objective", "goal_reached", "heartbeat", "unlock", "mission_success",
+    "mission_fail", "ui_tap", "ui_back", "drone"];
+  const blankLine = () => ({ speaker: "KESTREL", text: "", sfxBefore: "", sfxAfter: "", pauseAfterMs: 260 });
+  const blankSignal = () => ({ from: "KESTREL", text: "" });
+  const blankCodex = () => ({ id: "", title: "", category: "", body: "" });
+  const blankBeat = (n) => ({
+    id: "m1_b" + n, headline: "", at: { fraction: 0.2 },
+    unlocksCodex: "", lines: [blankLine()], chase: null
+  });
+  const blankMission = (n) => ({
+    id: "m" + n, order: n, codename: "", title: "", location: "",
+    objective: "", brief: "", debrief: "", epilogue: "",
+    suggestedGoal: { type: "time", value: 900 },
+    codex: [], beats: [], signals: { reminder: [], ambient: [] }
+  });
+
+  let data = {
+    id: "mi_campana", title: "MI CAMPAÑA", tagline: "", season: "",
+    missions: [blankMission(1)],
+    signals: {
+      reminder: [blankSignal()], ambient: [blankSignal()],
+      debrief: { met: [blankSignal()], missed: [blankSignal()], idle: [blankSignal()] }
+    }
+  };
+  let active = 0;
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+  const get = (path) => path.split(".").reduce((o, k) => o?.[k], data);
+  const set = (path, value) => {
+    const bits = path.split(".");
+    const key = bits.pop();
+    const obj = bits.reduce((o, k) => o[k], data);
+    obj[key] = value;
+  };
+  const field = (label, path, value, type = "text", wide = false) =>
+    `<div class="field ${wide ? "wide" : ""}"><label>${esc(label)}</label>
+      <input type="${type}" data-path="${esc(path)}" value="${esc(value)}"
+      ${type === "number" ? 'step="any"' : ""}></div>`;
+  const area = (label, path, value, wide = true) =>
+    `<div class="field ${wide ? "wide" : ""}"><label>${esc(label)}</label>
+      <textarea data-path="${esc(path)}">${esc(value)}</textarea></div>`;
+  const addButton = (label, action, path) =>
+    `<button type="button" data-action="${action}" data-list="${esc(path)}">＋ ${esc(label)}</button>`;
+  const removeButton = (path, i) =>
+    `<button type="button" class="danger" data-action="remove" data-list="${esc(path)}" data-index="${i}">Quitar</button>`;
+
+  function signalList(title, path) {
+    const items = get(path) || [];
+    return `<div class="item"><div class="row"><strong>${esc(title)} (${items.length})</strong>
+      ${addButton("Añadir mensaje", "add-signal", path)}</div>
+      ${items.map((m, i) => `<div class="grid item">
+        ${field("Emisor", `${path}.${i}.from`, m.from)}
+        ${area("Texto", `${path}.${i}.text`, m.text)}
+        <div class="wide">${removeButton(path, i)}</div>
+      </div>`).join("")}
+    </div>`;
+  }
+
+  function renderPackageSignals() {
+    $("#pack-signals").innerHTML =
+      signalList("Recordatorios", "signals.reminder") +
+      signalList("Mensajes ambientales", "signals.ambient");
+    $("#debrief-signals").innerHTML =
+      ["met", "missed", "idle"].map(k => signalList(
+        { met: "Objetivo semanal alcanzado", missed: "Objetivo no alcanzado", idle: "Sin actividad" }[k],
+        `signals.debrief.${k}`
+      )).join("");
+  }
+
+  function lineEditor(line, path) {
+    return `<div class="grid item">
+      <div class="field"><label>Emisor / voz</label>
+        <select data-path="${path}.speaker">${speakers.map(s =>
+          `<option ${line.speaker === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select></div>
+      ${field("Pausa después (ms)", `${path}.pauseAfterMs`, line.pauseAfterMs, "number")}
+      ${area("Texto hablado (máximo 260 caracteres)", `${path}.text`, line.text)}
+      <div class="field"><label>Efecto antes</label><select data-path="${path}.sfxBefore">
+        ${sfx.map(x => `<option value="${esc(x)}" ${line.sfxBefore === x ? "selected" : ""}>${esc(x || "Ninguno")}</option>`).join("")}
+      </select></div>
+      <div class="field"><label>Efecto después</label><select data-path="${path}.sfxAfter">
+        ${sfx.map(x => `<option value="${esc(x)}" ${line.sfxAfter === x ? "selected" : ""}>${esc(x || "Ninguno")}</option>`).join("")}
+      </select></div>
+      <div class="wide">${removeButton(path.slice(0, path.lastIndexOf(".")), Number(path.split(".").pop()))}</div>
+    </div>`;
+  }
+
+  function renderMission() {
+    const m = data.missions[active];
+    const root = `missions.${active}`;
+    if (!m) { $("#mission-editor").innerHTML = "Añade una misión para empezar."; return; }
+
+    $("#mission-editor").innerHTML = `
+      <div class="row" style="margin-top:16px"><strong>${esc(m.codename || m.title || "Nueva misión")}</strong>
+        <button class="danger" data-action="remove-mission" type="button">Eliminar misión</button></div>
+      <div class="grid">
+        ${field("ID único", `${root}.id`, m.id)}
+        ${field("Orden de desbloqueo", `${root}.order`, m.order, "number")}
+        ${field("Nombre corto / codename", `${root}.codename`, m.codename)}
+        ${field("Título", `${root}.title`, m.title)}
+        ${field("Ubicación", `${root}.location`, m.location)}
+        ${field("Objetivo", `${root}.objective`, m.objective, "text", true)}
+        ${area("Brief de la misión", `${root}.brief`, m.brief)}
+        ${area("Debrief al completar", `${root}.debrief`, m.debrief)}
+        ${field("Epílogo (opcional)", `${root}.epilogue`, m.epilogue, "text", true)}
+        <div class="field"><label>Meta sugerida</label>
+          <select data-path="${root}.suggestedGoal.type">
+            <option value="time" ${m.suggestedGoal.type === "time" ? "selected" : ""}>Tiempo (segundos)</option>
+            <option value="distance" ${m.suggestedGoal.type === "distance" ? "selected" : ""}>Distancia (metros)</option>
+          </select></div>
+        ${field("Valor de la meta", `${root}.suggestedGoal.value`, m.suggestedGoal.value, "number")}
+      </div>
+
+      <h3>Mensajes de esta misión</h3>
+      <p class="hint">Se muestran antes de la misión. Evita spoilers; cada texto debe tener menos de 180 caracteres.</p>
+      ${signalList("Recordatorios", `${root}.signals.reminder`)}
+      ${signalList("Mensajes ambientales", `${root}.signals.ambient`)}
+
+      <h3>Entradas de códice</h3>
+      ${m.codex.map((c, i) => `<div class="item"><div class="row"><strong>Entrada ${i + 1}</strong>
+        ${removeButton(`${root}.codex`, i)}</div><div class="grid">
+        ${field("ID", `${root}.codex.${i}.id`, c.id)}
+        ${field("Título", `${root}.codex.${i}.title`, c.title)}
+        ${field("Categoría", `${root}.codex.${i}.category`, c.category)}
+        ${area("Contenido", `${root}.codex.${i}.body`, c.body)}
+      </div></div>`).join("")}
+      ${addButton("Añadir entrada de códice", "add-codex", `${root}.codex`)}
+
+      <h3>Transmisiones / interludios</h3>
+      <p class="hint">Los beats se reproducen en el orden de la lista. Fraction va de 0 a 1.</p>
+      ${m.beats.map((b, i) => {
+        const bp = `${root}.beats.${i}`;
+        return `<div class="item">
+          <div class="row"><strong>Transmisión ${i + 1}</strong>${removeButton(`${root}.beats`, i)}</div>
+          <div class="grid">
+            ${field("ID único en esta misión", `${bp}.id`, b.id)}
+            ${field("Titular opcional", `${bp}.headline`, b.headline)}
+            ${field("Fracción del objetivo (0–1)", `${bp}.at.fraction`, b.at?.fraction ?? "", "number")}
+            ${field("Segundos (opcional)", `${bp}.at.seconds`, b.at?.seconds ?? "", "number")}
+            ${field("Metros (opcional)", `${bp}.at.meters`, b.at?.meters ?? "", "number")}
+            ${field("ID de códice que desbloquea (opcional)", `${bp}.unlocksCodex`, b.unlocksCodex, "text", true)}
+          </div>
+          <h3>Líneas</h3>
+          ${b.lines.map((line, j) => lineEditor(line, `${bp}.lines.${j}`)).join("")}
+          ${addButton("Añadir línea", "add-line", `${bp}.lines`)}
+          <h3>Persecución opcional</h3>
+          <label class="checkbox"><input type="checkbox" data-action="toggle-chase" data-index="${i}" ${b.chase ? "checked" : ""}> Añadir persecución al terminar las líneas</label>
+          ${b.chase ? `<div class="grid item">
+            ${field("Duración (segundos)", `${bp}.chase.seconds`, b.chase.seconds, "number")}
+            ${field("Multiplicador de ritmo", `${bp}.chase.paceFactor`, b.chase.paceFactor, "number")}
+            ${field("Perseguidor", `${bp}.chase.pursuer`, b.chase.pursuer, "text", true)}
+            <div class="field wide"><label>Líneas si escapa</label>
+              <div>${b.chase.escaped.map((l, j) => lineEditor(l, `${bp}.chase.escaped.${j}`)).join("")}
+              ${addButton("Añadir línea de escape", "add-line", `${bp}.chase.escaped`)}</div></div>
+            <div class="field wide"><label>Líneas si lo atrapan</label>
+              <div>${b.chase.caught.map((l, j) => lineEditor(l, `${bp}.chase.caught.${j}`)).join("")}
+              ${addButton("Añadir línea si lo atrapan", "add-line", `${bp}.chase.caught`)}</div></div>
+          </div>` : ""}
+        </div>`;
+      }).join("")}
+      ${addButton("Añadir transmisión", "add-beat", `${root}.beats`)}
+    `;
+
+    const select = $("#mission-select");
+    select.innerHTML = data.missions.map((x, i) =>
+      `<option value="${i}" ${i === active ? "selected" : ""}>${i + 1}. ${esc(x.codename || x.title || x.id)}</option>`
+    ).join("");
+  }
+
+  function clean(value) {
+    if (Array.isArray(value)) return value.map(clean);
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (v === "" || v === null || v === undefined) continue;
+        const c = clean(v);
+        if (Array.isArray(c) && c.length === 0 &&
+            !["missions", "beats", "lines", "codex", "reminder", "ambient", "met", "missed", "idle", "escaped", "caught"].includes(k)) continue;
+        out[k] = c;
+      }
+      return out;
+    }
+    return value;
+  }
+
+  function updateOutput() {
+    $("#json").value = JSON.stringify(clean(data), null, 2);
+  }
+
+  function validate() {
+    const errors = [];
+    if (!/^[A-Za-z0-9_-]+$/.test(data.id || "")) errors.push("El ID del paquete solo puede usar letras, números, guion y guion bajo.");
+    if (!data.title) errors.push("Falta el título del paquete.");
+    if (!data.missions.length) errors.push("Añade al menos una misión.");
+    const ids = new Set();
+    data.missions.forEach((m, i) => {
+      if (!m.id) errors.push(`Misión ${i + 1}: falta el ID.`);
+      else if (ids.has(m.id)) errors.push(`ID de misión repetido: ${m.id}.`);
+      ids.add(m.id);
+      if (!m.title || !m.codename) errors.push(`Misión ${i + 1}: completa título y codename.`);
+      if (!m.signals?.reminder?.length || !m.signals?.ambient?.length)
+        errors.push(`Misión ${i + 1}: añade al menos un recordatorio y un mensaje ambiental.`);
+      for (const kind of ["reminder", "ambient"]) {
+        (m.signals?.[kind] || []).forEach(s => {
+          if (s.text.length >= 180) errors.push(`Misión ${i + 1}: un mensaje de ${kind} tiene 180 caracteres o más.`);
+        });
+      }
+      let last = -1;
+      m.beats.forEach((b, j) => {
+        if (!b.id) errors.push(`Misión ${i + 1}, transmisión ${j + 1}: falta el ID.`);
+        const f = Number(b.at?.fraction);
+        if (Number.isFinite(f)) {
+          if (f < last) errors.push(`Misión ${i + 1}: revisa el orden de activación de las transmisiones.`);
+          last = f;
+          if (f < 0 || f > 1) errors.push(`Misión ${i + 1}: fraction debe estar entre 0 y 1.`);
+        } else if (b.at?.seconds == null && b.at?.meters == null) {
+          errors.push(`Misión ${i + 1}, transmisión ${j + 1}: define un activador.`);
+        }
+        const lines = [...b.lines, ...(b.chase?.escaped || []), ...(b.chase?.caught || [])];
+        lines.forEach(l => {
+          if (l.text.length > 260) errors.push(`Misión ${i + 1}: una línea de transmisión supera 260 caracteres.`);
+        });
+      });
+    });
+    for (const kind of ["reminder", "ambient"]) {
+      (data.signals?.[kind] || []).forEach(s => {
+        if (s.text.length >= 180) errors.push(`Un mensaje general de ${kind} tiene 180 caracteres o más.`);
+      });
+    }
+    ["met", "missed", "idle"].forEach(k => {
+      (data.signals?.debrief?.[k] || []).forEach(s => {
+        if (s.text.length >= 90) errors.push(`Un mensaje de resumen (${k}) tiene 90 caracteres o más.`);
+      });
+    });
+    $("#validation-status").innerHTML = errors.length
+      ? `<span class="bad">${errors.length} aviso(s) para revisar</span>`
+      : `<span class="ok">No se encontraron errores básicos.</span>`;
+    $("#issues").innerHTML = errors.map(e => `<li>${esc(e)}</li>`).join("");
+  }
+
+  function refresh() { renderPackageSignals(); renderMission(); updateOutput(); validate(); }
+  function ensureDefaults(p) {
+    const base = {
+      ...data, ...p,
+      signals: { ...data.signals, ...(p.signals || {}),
+        debrief: { ...data.signals.debrief, ...(p.signals?.debrief || {}) } }
+    };
+    base.missions = (p.missions || []).map((m, i) => {
+      const d = blankMission(i + 1);
+      const out = { ...d, ...m, suggestedGoal: { ...d.suggestedGoal, ...(m.suggestedGoal || {}) },
+        signals: { ...d.signals, ...(m.signals || {}) } };
+      out.codex = m.codex || [];
+      out.beats = (m.beats || []).map((b, j) => ({
+        ...blankBeat(j + 1), ...b, at: { ...(b.at || {}) },
+        lines: b.lines || [blankLine()],
+        chase: b.chase ? { ...b.chase, escaped: b.chase.escaped || [], caught: b.chase.caught || [] } : null
+      }));
+      return out;
+    });
+    return base;
+  }
+
+  document.addEventListener("input", e => {
+    const el = e.target;
+    if (el.dataset.path) {
+      let v = el.value;
+      if (el.type === "number") v = v === "" ? "" : Number(v);
+      set(el.dataset.path, v);
+      updateOutput(); validate();
+    }
+  });
+  document.addEventListener("change", e => {
+    const el = e.target;
+    if (el.dataset.path) {
+      let v = el.value;
+      if (el.type === "number") v = v === "" ? "" : Number(v);
+      set(el.dataset.path, v);
+      updateOutput(); validate();
+    }
+  });
+
+  document.addEventListener("click", e => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const path = btn.dataset.list;
+    if (action === "add-mission") {
+      data.missions.push(blankMission(data.missions.length + 1));
+      active = data.missions.length - 1;
+    } else if (action === "remove-mission") {
+      if (data.missions.length > 1) {
+        data.missions.splice(active, 1);
+        active = Math.max(0, active - 1);
+      }
+    } else if (action === "add-signal") get(path).push(blankSignal());
+    else if (action === "add-codex") get(path).push(blankCodex());
+    else if (action === "add-beat") get(path).push(blankBeat(get(path).length + 1));
+    else if (action === "add-line") get(path).push(blankLine());
+    else if (action === "remove") {
+      const arr = get(path);
+      arr.splice(Number(btn.dataset.index), 1);
+    } else if (action === "toggle-chase") {
+      const beat = data.missions[active].beats[Number(btn.dataset.index)];
+      beat.chase = btn.checked ? { seconds: 60, paceFactor: 1.1, pursuer: "", escaped: [], caught: [] } : null;
+      renderMission(); updateOutput(); validate(); return;
+    }
+    refresh();
+  });
+
+  $("#mission-select").addEventListener("change", e => {
+    active = Number(e.target.value); renderMission();
+  });
+  $("#validate").addEventListener("click", validate);
+  $("#download").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(clean(data), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (data.id || "paquete") + ".json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  $("#copy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText($("#json").value);
+    $("#copy").textContent = "Copiado";
+    setTimeout(() => $("#copy").textContent = "Copiar JSON", 1200);
+  });
+  $("#import-file").addEventListener("change", async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      data = ensureDefaults(JSON.parse(await file.text()));
+      active = 0;
+      refresh();
+    } catch (err) { alert("No se pudo abrir el JSON: " + err.message); }
+    e.target.value = "";
+  });
+
+  refresh();
+})();
+</script>
+</body>
+</html>
